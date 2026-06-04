@@ -1,0 +1,402 @@
+/* USER CODE BEGIN Header */
+/**
+  ******************************************************************************
+  * @file           : main.c
+  * @brief          : Main program body
+  ******************************************************************************
+  * @attention
+  *
+  * Copyright (c) 2026 STMicroelectronics.
+  * All rights reserved.
+  *
+  * This software is licensed under terms that can be found in the LICENSE file
+  * in the root directory of this software component.
+  * If no LICENSE file comes with this software, it is provided AS-IS.
+  *
+  ******************************************************************************
+  */
+/* USER CODE END Header */
+/* Includes ------------------------------------------------------------------*/
+#include "main.h"
+#include "spi.h"
+#include "usart.h"
+#include "gpio.h"
+
+/* Private includes ----------------------------------------------------------*/
+/* USER CODE BEGIN Includes */
+
+/* USER CODE END Includes */
+
+/* Private typedef -----------------------------------------------------------*/
+/* USER CODE BEGIN PTD */
+
+/* USER CODE END PTD */
+
+/* Private define ------------------------------------------------------------*/
+/* USER CODE BEGIN PD */
+#define Samples_Number  1    											// 采样点数
+#define Block_Size      1     										// 调用一次arm_fir_f32处理的采样点个数
+#define NumTaps        	129     									// 滤波器系数个数
+
+#define Show_wave       650
+/* USER CODE END PD */
+
+/* Private macro -------------------------------------------------------------*/
+/* USER CODE BEGIN PM */
+
+/* USER CODE END PM */
+
+/* Private variables ---------------------------------------------------------*/
+
+/* USER CODE BEGIN PV */
+	uint32_t ch1_data;		
+	uint32_t ch2_data;		
+	uint8_t flag;		
+  uint8_t drdy_flag;		
+
+
+	float32_t Input_data1; 														// 输入缓冲区
+	float32_t Output_data1;         									// 输出缓冲区
+	float32_t firState1[Block_Size + NumTaps - 1]; 		// 状态缓存，大小numTaps + blockSize - 1
+	float32_t Input_data2; 														// 输入缓冲区
+	float32_t Output_data2;         									// 输出缓冲区
+	float32_t firState2[Block_Size + NumTaps - 1]; 		// 状态缓存，大小numTaps + blockSize - 1
+
+	int32_t show_ecg[Show_wave];
+	int16_t ecg_index = 0;
+
+  uint32_t blockSize = Block_Size;									// 调用一次arm_fir_f32处理的采样点个数
+  uint32_t numBlocks = Samples_Number/Block_Size;   // 需要调用arm_fir_f32的次数
+	
+	arm_fir_instance_f32 S1;
+	arm_fir_instance_f32 S2;	
+
+
+/* USER CODE END PV */
+
+/* Private function prototypes -----------------------------------------------*/
+void SystemClock_Config(void);
+static void MPU_Config(void);
+/* USER CODE BEGIN PFP */
+
+/* USER CODE END PFP */
+
+/* Private user code ---------------------------------------------------------*/
+/* USER CODE BEGIN 0 */
+// 心电带通滤波器系数：采样频率为250Hz，截止频率为5Hz~40Hz 通过filterDesigner获取
+const float32_t BPF_5Hz_40Hz[NumTaps]  = {
+  3.523997657e-05,0.0002562592272,0.0005757701583,0.0008397826459, 0.000908970891,
+  0.0007304374012,0.0003793779761,4.222582356e-05,-6.521392788e-05,0.0001839015895,
+  0.0007320778677, 0.001328663086, 0.001635892317, 0.001413777587,0.0006883906899,
+  -0.0002056905651,-0.0007648666506,-0.0005919140531,0.0003351111372, 0.001569915912,
+   0.002375603188, 0.002117323689,0.0006689901347,-0.001414557919,-0.003109993879,
+  -0.003462586319, -0.00217742566,8.629632794e-05, 0.001947802957, 0.002011778764,
+  -0.0002987752669,-0.004264956806, -0.00809297245,-0.009811084718,-0.008411717601,
+  -0.004596390296,-0.0006214127061,0.0007985962438,-0.001978532877,-0.008395017125,
+   -0.01568987407, -0.02018531598, -0.01929843985, -0.01321159769,-0.005181713495,
+  -0.0001112028476,-0.001950757345, -0.01125541423,  -0.0243169684, -0.03460548073,
+   -0.03605531529, -0.02662901953, -0.01020727865, 0.004513713531, 0.008002913557,
+  -0.004921500571, -0.03125274926, -0.05950148031, -0.07363011688, -0.05986980721,
+   -0.01351031102,  0.05752891302,   0.1343045086,   0.1933406889,   0.2154731899,
+     0.1933406889,   0.1343045086,  0.05752891302, -0.01351031102, -0.05986980721,
+   -0.07363011688, -0.05950148031, -0.03125274926,-0.004921500571, 0.008002913557,
+   0.004513713531, -0.01020727865, -0.02662901953, -0.03605531529, -0.03460548073,
+    -0.0243169684, -0.01125541423,-0.001950757345,-0.0001112028476,-0.005181713495,
+   -0.01321159769, -0.01929843985, -0.02018531598, -0.01568987407,-0.008395017125,
+  -0.001978532877,0.0007985962438,-0.0006214127061,-0.004596390296,-0.008411717601,
+  -0.009811084718, -0.00809297245,-0.004264956806,-0.0002987752669, 0.002011778764,
+   0.001947802957,8.629632794e-05, -0.00217742566,-0.003462586319,-0.003109993879,
+  -0.001414557919,0.0006689901347, 0.002117323689, 0.002375603188, 0.001569915912,
+  0.0003351111372,-0.0005919140531,-0.0007648666506,-0.0002056905651,0.0006883906899,
+   0.001413777587, 0.001635892317, 0.001328663086,0.0007320778677,0.0001839015895,
+  -6.521392788e-05,4.222582356e-05,0.0003793779761,0.0007304374012, 0.000908970891,
+  0.0008397826459,0.0005757701583,0.0002562592272,3.523997657e-05
+	};
+
+// 呼吸波低通滤波器系数：采样频率为250Hz，截止频率为2Hz 通过filterDesigner获取
+const float32_t LPF_2Hz[NumTaps]  = {
+  -0.0004293085367,-0.0004170549801,-0.0004080719373,-0.0004015014856,-0.0003963182389,
+  -0.000391335343,-0.0003852125083,-0.0003764661378,-0.0003634814057,-0.0003445262846,
+  -0.0003177672043,-0.0002812864841,-0.0002331012802,-0.0001711835939,-9.348169988e-05,
+  2.057720394e-06,0.0001174666468, 0.000254732382,0.0004157739459,0.0006024184986,
+   0.000816378044, 0.001059226575, 0.001332378131,  0.00163706555,  0.00197432097,
+   0.002344956854, 0.002749550389, 0.003188427072, 0.003661649302, 0.004169005435,
+    0.00471000094, 0.005283853505, 0.005889489781, 0.006525543984, 0.007190360688,
+   0.007882000878, 0.008598247543, 0.009336617775,  0.01009437256,  0.01086853724,
+    0.01165591553,  0.01245311089,  0.01325654797,  0.01406249963,  0.01486710832,
+    0.01566641964,  0.01645640284,  0.01723298989,  0.01799209975,  0.01872966997,
+    0.01944169216,  0.02012423798,  0.02077349275,  0.02138578519,  0.02195761539,
+     0.0224856846,  0.02296692133,  0.02339850739,  0.02377789468,  0.02410283685,
+    0.02437139489,  0.02458196506,  0.02473328263,  0.02482444048,  0.02485488541,
+    0.02482444048,  0.02473328263,  0.02458196506,  0.02437139489,  0.02410283685,
+    0.02377789468,  0.02339850739,  0.02296692133,   0.0224856846,  0.02195761539,
+    0.02138578519,  0.02077349275,  0.02012423798,  0.01944169216,  0.01872966997,
+    0.01799209975,  0.01723298989,  0.01645640284,  0.01566641964,  0.01486710832,
+    0.01406249963,  0.01325654797,  0.01245311089,  0.01165591553,  0.01086853724,
+    0.01009437256, 0.009336617775, 0.008598247543, 0.007882000878, 0.007190360688,
+   0.006525543984, 0.005889489781, 0.005283853505,  0.00471000094, 0.004169005435,
+   0.003661649302, 0.003188427072, 0.002749550389, 0.002344956854,  0.00197432097,
+    0.00163706555, 0.001332378131, 0.001059226575, 0.000816378044,0.0006024184986,
+  0.0004157739459, 0.000254732382,0.0001174666468,2.057720394e-06,-9.348169988e-05,
+  -0.0001711835939,-0.0002331012802,-0.0002812864841,-0.0003177672043,-0.0003445262846,
+  -0.0003634814057,-0.0003764661378,-0.0003852125083,-0.000391335343,-0.0003963182389,
+  -0.0004015014856,-0.0004080719373,-0.0004170549801,-0.0004293085367
+	};
+
+
+/* USER CODE END 0 */
+
+/**
+  * @brief  The application entry point.
+  * @retval int
+  */
+int main(void)
+{
+
+  /* USER CODE BEGIN 1 */
+
+  /* USER CODE END 1 */
+
+  /* MPU Configuration--------------------------------------------------------*/
+  MPU_Config();
+
+  /* MCU Configuration--------------------------------------------------------*/
+
+  /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
+  HAL_Init();
+
+  /* USER CODE BEGIN Init */
+
+  /* USER CODE END Init */
+
+  /* Configure the system clock */
+  SystemClock_Config();
+
+  /* USER CODE BEGIN SysInit */
+
+  /* USER CODE END SysInit */
+
+  /* Initialize all configured peripherals */
+  MX_GPIO_Init();
+  MX_SPI1_Init();
+  MX_SPI2_Init();
+  MX_UART5_Init();
+  MX_UART7_Init();
+  /* USER CODE BEGIN 2 */
+	SPI_Init();
+	ADS1292_Init(&hspi1);
+	ADS1292_Set_start(&hspi1);
+	
+	arm_fir_init_f32(&S1, NumTaps, (float32_t *)LPF_2Hz, firState1, blockSize);
+	arm_fir_init_f32(&S2, NumTaps, (float32_t *)BPF_5Hz_40Hz, firState2, blockSize);
+	
+  /* USER CODE END 2 */
+
+  /* Infinite loop */
+  /* USER CODE BEGIN WHILE */
+  while (1)
+  {
+    /* USER CODE END WHILE */
+
+    /* USER CODE BEGIN 3 */
+		
+    if(drdy_flag==1)
+    {
+				uint8_t j;
+        uint8_t read_data[9];
+        CS_LOW();
+        for (j = 0; j < 9; j++)
+        {
+           read_data[j]=SPI_ReadWriteByte(&hspi1,0);
+        }
+        CS_HIGH();
+        ch1_data = ((uint32_t)read_data[3] << 16) | ((uint32_t)read_data[4] << 8) | (uint32_t)read_data[5];
+        ch2_data = ((uint32_t)read_data[6] << 16) | ((uint32_t)read_data[7] << 8) | (uint32_t)read_data[8];
+        flag = 1;
+        drdy_flag=0;
+    }
+		if(flag==1)
+		{
+			// 通道1呼吸波数据			
+			// Input_data1=(float32_t)ch1_data/(float32_t)((1<<23)-1)*(2.42/4.0);//实际电压值
+			Input_data1=(float32_t)ch1_data;
+			// 实现FIR滤波
+			arm_fir_f32(&S1, &Input_data1, &Output_data1, blockSize);
+			
+			// 通道2心电波形数据			
+			// Input_data2=(float32_t)ch2_data/(float32_t)((1<<23)-1)*(2.42/6.0);//实际电压值
+			Input_data2=(float32_t)ch2_data;
+			// 实现FIR滤波
+			arm_fir_f32(&S2, &Input_data2, &Output_data2, blockSize);
+			
+			if(ecg_index < Show_wave)
+        {
+            // 如果需要存储原始浮点数值
+            show_ecg[ecg_index] = (uint32_t)Output_data2;
+						show_ecg[ecg_index]=show_ecg[ecg_index]/150-1580;
+					if(show_ecg[ecg_index]<0)show_ecg[ecg_index]=0;
+					if(show_ecg[ecg_index]>255)show_ecg[ecg_index]=255;
+					ecg_index++;
+        }
+				
+        // 当收集满4500个点后，统一输出
+        if(ecg_index >= Show_wave)
+        {
+						ADS1292_Init(&hspi1);
+            for(uint16_t i = 0; i < Show_wave; i++)
+            {
+                // 按照您需要的格式输出每个点
+               printf("add s0.id,0,%d\xff\xff\xff", show_ecg[i]);
+							HAL_Delay(100);
+//								printf("%d\r\n", show_ecg[i]);
+            }
+            ecg_index = 0;  // 重置索引，可以继续下一轮采集
+						
+        }
+
+			flag=0;
+		}
+  }
+		
+  /* USER CODE END 3 */
+}
+
+/**
+  * @brief System Clock Configuration
+  * @retval None
+  */
+void SystemClock_Config(void)
+{
+  RCC_OscInitTypeDef RCC_OscInitStruct = {0};
+  RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
+
+  /** Supply configuration update enable
+  */
+  HAL_PWREx_ConfigSupply(PWR_LDO_SUPPLY);
+
+  /** Configure the main internal regulator output voltage
+  */
+  __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE0);
+
+  while(!__HAL_PWR_GET_FLAG(PWR_FLAG_VOSRDY)) {}
+
+  /** Initializes the RCC Oscillators according to the specified parameters
+  * in the RCC_OscInitTypeDef structure.
+  */
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
+  RCC_OscInitStruct.HSIState = RCC_HSI_DIV1;
+  RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
+  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
+  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI;
+  RCC_OscInitStruct.PLL.PLLM = 4;
+  RCC_OscInitStruct.PLL.PLLN = 60;
+  RCC_OscInitStruct.PLL.PLLP = 2;
+  RCC_OscInitStruct.PLL.PLLQ = 5;
+  RCC_OscInitStruct.PLL.PLLR = 2;
+  RCC_OscInitStruct.PLL.PLLRGE = RCC_PLL1VCIRANGE_3;
+  RCC_OscInitStruct.PLL.PLLVCOSEL = RCC_PLL1VCOWIDE;
+  RCC_OscInitStruct.PLL.PLLFRACN = 0;
+  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Initializes the CPU, AHB and APB buses clocks
+  */
+  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
+                              |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2
+                              |RCC_CLOCKTYPE_D3PCLK1|RCC_CLOCKTYPE_D1PCLK1;
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
+  RCC_ClkInitStruct.SYSCLKDivider = RCC_SYSCLK_DIV1;
+  RCC_ClkInitStruct.AHBCLKDivider = RCC_HCLK_DIV2;
+  RCC_ClkInitStruct.APB3CLKDivider = RCC_APB3_DIV2;
+  RCC_ClkInitStruct.APB1CLKDivider = RCC_APB1_DIV2;
+  RCC_ClkInitStruct.APB2CLKDivider = RCC_APB2_DIV2;
+  RCC_ClkInitStruct.APB4CLKDivider = RCC_APB4_DIV2;
+
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_4) != HAL_OK)
+  {
+    Error_Handler();
+  }
+}
+
+/* USER CODE BEGIN 4 */
+
+
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
+{
+    switch(GPIO_Pin)
+    {
+        case GPIO_PIN_3:
+            {
+                drdy_flag = 1; 
+                break;
+            }
+        default:
+            printf("Unknown EXTI interrupt triggered: GPIO_Pin = %d\r\n", GPIO_Pin);
+          break;
+        
+    }
+}
+
+/* USER CODE END 4 */
+
+ /* MPU Configuration */
+
+void MPU_Config(void)
+{
+  MPU_Region_InitTypeDef MPU_InitStruct = {0};
+
+  /* Disables the MPU */
+  HAL_MPU_Disable();
+
+  /** Initializes and configures the Region and the memory to be protected
+  */
+  MPU_InitStruct.Enable = MPU_REGION_ENABLE;
+  MPU_InitStruct.Number = MPU_REGION_NUMBER0;
+  MPU_InitStruct.BaseAddress = 0x0;
+  MPU_InitStruct.Size = MPU_REGION_SIZE_4GB;
+  MPU_InitStruct.SubRegionDisable = 0x87;
+  MPU_InitStruct.TypeExtField = MPU_TEX_LEVEL0;
+  MPU_InitStruct.AccessPermission = MPU_REGION_NO_ACCESS;
+  MPU_InitStruct.DisableExec = MPU_INSTRUCTION_ACCESS_DISABLE;
+  MPU_InitStruct.IsShareable = MPU_ACCESS_SHAREABLE;
+  MPU_InitStruct.IsCacheable = MPU_ACCESS_NOT_CACHEABLE;
+  MPU_InitStruct.IsBufferable = MPU_ACCESS_NOT_BUFFERABLE;
+
+  HAL_MPU_ConfigRegion(&MPU_InitStruct);
+  /* Enables the MPU */
+  HAL_MPU_Enable(MPU_PRIVILEGED_DEFAULT);
+
+}
+
+/**
+  * @brief  This function is executed in case of error occurrence.
+  * @retval None
+  */
+void Error_Handler(void)
+{
+  /* USER CODE BEGIN Error_Handler_Debug */
+  /* User can add his own implementation to report the HAL error return state */
+  __disable_irq();
+  while (1)
+  {
+  }
+  /* USER CODE END Error_Handler_Debug */
+}
+#ifdef USE_FULL_ASSERT
+/**
+  * @brief  Reports the name of the source file and the source line number
+  *         where the assert_param error has occurred.
+  * @param  file: pointer to the source file name
+  * @param  line: assert_param error line source number
+  * @retval None
+  */
+void assert_failed(uint8_t *file, uint32_t line)
+{
+  /* USER CODE BEGIN 6 */
+  /* User can add his own implementation to report the file name and line number,
+     ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
+  /* USER CODE END 6 */
+}
+#endif /* USE_FULL_ASSERT */
